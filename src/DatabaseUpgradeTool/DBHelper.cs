@@ -1,6 +1,9 @@
-﻿using System.Data;
+﻿using System;
+using System.Collections.Generic;
+using System.Data;
 using System.Data.SqlClient;
-using System.Text.RegularExpressions;
+using System.IO;
+using Microsoft.SqlServer.TransactSql.ScriptDom;
 
 
 namespace DatabaseVersioningTool
@@ -53,8 +56,7 @@ namespace DatabaseVersioningTool
 
         public void ExecuteMigration(string commandText)
         {
-            Regex regex = new Regex("^GO", RegexOptions.IgnoreCase | RegexOptions.Multiline);
-            string[] subCommands = regex.Split(commandText);
+            var subCommands = GetBatches(commandText);
 
             using (SqlConnection connection = new SqlConnection(_connectionString))
             {
@@ -87,6 +89,25 @@ namespace DatabaseVersioningTool
 
                 transaction.Commit();
             }
+        }
+
+        private static IEnumerable<string> GetBatches(string text)
+        {
+            var parser = new TSql120Parser(false);
+            IList<ParseError> parseErrors;
+            var scriptFragment = parser.Parse(new StringReader(text), out parseErrors);
+            if (parseErrors.Count > 0)
+            {
+                var error = parseErrors[0];
+                throw new ApplicationException($@"{error.Message}
+Line={error.Line},
+Column={error.Column}");
+            }
+            if (!(scriptFragment is TSqlScript))
+                throw new ApplicationException();
+            var sqlScript = (TSqlScript) scriptFragment;
+            foreach (var sqlBatch in sqlScript.Batches)
+                yield return text.Substring(sqlBatch.StartOffset, sqlBatch.FragmentLength);
         }
     }
 }
